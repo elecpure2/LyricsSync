@@ -1,4 +1,4 @@
-# 🎬 LyricsSync
+﻿# 🎬 LyricsSync
 
 [한국어](README.md) · [English](README.en.md) · **日本語** · [中文](README.zh.md)
 
@@ -147,7 +147,7 @@ ASRで「書き起こす」のではなく、**既に分かっている正解歌
 ## インストール & 起動
 
 ```
-git clone https://github.com/<YOUR_GITHUB>/LyricsSync.git
+git clone https://github.com/elecpure2/LyricsSync.git
 cd LyricsSync
 install.bat        ← ダブルクリック一回（venv + PyTorch + ffmpeg 自動インストール）
 ```

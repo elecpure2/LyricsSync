@@ -1,4 +1,4 @@
-# 🎬 LyricsSync
+﻿# 🎬 LyricsSync
 
 [한국어](README.md) · **English** · [日本語](README.ja.md) · [中文](README.zh.md)
 
@@ -140,7 +140,7 @@ every later re-alignment finishes in milliseconds.
 ## Install & run
 
 ```
-git clone https://github.com/<YOUR_GITHUB>/LyricsSync.git
+git clone https://github.com/elecpure2/LyricsSync.git
 cd LyricsSync
 install.bat        ← one double-click (venv + PyTorch + ffmpeg, all automatic)
 ```

@@ -1,4 +1,4 @@
-# 🎬 LyricsSync
+﻿# 🎬 LyricsSync
 
 [한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · **中文**
 
@@ -142,7 +142,7 @@ LyricsSync 消灭了这个循环：
 ## 安装 & 运行
 
 ```
-git clone https://github.com/<YOUR_GITHUB>/LyricsSync.git
+git clone https://github.com/elecpure2/LyricsSync.git
 cd LyricsSync
 install.bat        ← 双击一次（自动安装 venv + PyTorch + ffmpeg）
 ```

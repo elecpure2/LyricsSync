@@ -1,0 +1,13 @@
+# PyTorch is installed separately with the cu128 index (see install.bat)
+fastapi
+uvicorn
+pywebview
+soundfile
+librosa
+numpy
+audio-separator
+onnxruntime
+openai-whisper
+uroman
+pillow
+python-multipart

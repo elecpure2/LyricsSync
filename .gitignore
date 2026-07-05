@@ -1,0 +1,17 @@
+# python env & caches
+.venv/
+__pycache__/
+*.pyc
+
+# user data — song copies, stems, alignment caches
+projects/
+
+# bundled binaries (downloaded by install.bat)
+bin/
+
+# logs & local artifacts
+*.log
+LyricsSync.lnk
+
+# dev tooling
+.claude/

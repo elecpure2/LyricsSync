@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>LyricsSync</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- ============ HOME ============ -->
+<div id="home" class="screen">
+  <div class="home-cols">
+    <div class="panel">
+      <div class="panel-head">
+        <h2 data-i18n="projects">프로젝트</h2>
+        <div class="head-tools">
+          <select id="langSel" class="btn lang-sel"></select>
+          <button id="btnHelpHome" class="btn help-btn" title="Help">?</button>
+        </div>
+      </div>
+      <div id="projectList" class="proj-list"></div>
+    </div>
+    <div class="panel">
+      <h2 data-i18n="newProject">새 프로젝트</h2>
+      <label data-i18n="lblName">프로젝트 이름</label>
+      <input id="npName" type="text" data-i18n-ph="phName" placeholder="예: Half Step Down">
+      <label data-i18n="lblAudio">음원 파일</label>
+      <div id="dropZone" class="drop-zone">
+        <button id="npPick" class="btn" data-i18n="btnPick">파일 선택…</button>
+        <span id="npFile" class="file-name" data-i18n="dropHint">또는 여기로 드래그 앤 드랍</span>
+      </div>
+      <label data-i18n="lblSongLang">노래 언어 (가사 자동 추출 시 사용)</label>
+      <select id="npLang" class="btn song-lang">
+        <option value="auto" data-i18n="optAuto">자동 감지</option>
+        <option value="ko">한국어</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="zh">中文</option>
+        <option value="es">Español</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="ru">Русский</option>
+      </select>
+      <label data-i18n="lblLyrics">가사</label>
+      <textarea id="npLyrics" data-i18n-ph="phLyrics"></textarea>
+      <button id="npCreate" class="btn primary" data-i18n="btnStart">분석 시작</button>
+      <div id="npStatus" class="status"></div>
+    </div>
+  </div>
+  <div id="sysNote" class="sys-note">
+    <span id="sysDevice"></span>
+    <span class="sys-sep">·</span>
+    <span data-i18n="sysRecommend"></span>
+    <span class="sys-sep">·</span>
+    <span data-i18n="sysFirstRun"></span>
+  </div>
+</div>
+
+<!-- ============ EDITOR ============ -->
+<div id="editor" class="screen" style="display:none">
+  <div id="waveWrap">
+    <div id="waveform"></div>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div id="transport">
+    <button class="btn home-btn" id="btnBack" data-i18n="btnHome">&#x2190; 홈</button>
+    <button class="btn icon" id="btnPlay" title="Space">&#9654;</button>
+    <span id="timeDisp" class="mono">0:00.000</span>
+    <select id="stemSel" class="btn">
+      <option value="source" data-i18n="stemSource">원곡</option>
+      <option value="vocals" data-i18n="stemVocals">보컬만</option>
+      <option value="drums" data-i18n="stemDrums">드럼만</option>
+    </select>
+    <label class="zoom-label"><span data-i18n="zoom">확대</span> <input id="zoom" type="range" min="8" max="400" value="60"></label>
+    <button class="btn wave-lyrics-btn" id="btnWaveLyrics">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="0.5" y="5" width="2" height="4" rx="1" fill="currentColor" opacity=".55"/>
+        <rect x="4"   y="2.5" width="2" height="9" rx="1" fill="currentColor" opacity=".8"/>
+        <rect x="7.5" y="4" width="2" height="6" rx="1" fill="currentColor"/>
+        <rect x="11"  y="5.5" width="2" height="3" rx="1" fill="currentColor" opacity=".55"/>
+      </svg><span>가</span>
+    </button>
+    <label id="multiWrap" class="multi-label" style="display:none">
+      <input type="checkbox" id="multiChk"> <span data-i18n="multiSel">다중선택</span>
+    </label>
+    <span class="spacer"></span>
+    <span id="bpmDisp" class="pill"></span>
+    <label class="fps-label">fps <input id="fpsInput" type="number" value="30" min="1" max="120"></label>
+    <button class="btn" id="btnCopy" data-i18n="btnCopyRange">구간 복사</button>
+    <button class="btn" id="btnCopyLyrics" data-i18n="btnCopyLyrics">가사 복사</button>
+    <button class="btn" id="btnExport" data-i18n="btnExport">JSON 내보내기</button>
+    <button id="btnHelpEditor" class="btn help-btn" title="Help">?</button>
+  </div>
+  <div id="lyricsPane"></div>
+  <div id="hintbar">
+    <span data-i18n-html="hintbar"></span>
+    <span id="busy" class="busy"></span>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="ctxMenu" class="ctx-menu" style="display:none"></div>
+<button id="regionBtn" class="btn primary region-btn" style="display:none"></button>
+<div id="insertPop" class="insert-pop" style="display:none">
+  <input id="insertText" type="text" data-i18n-ph="phInsert">
+  <button class="btn primary" id="insertOk" data-i18n="btnAdd">추가</button>
+  <button class="btn" id="insertCancel" data-i18n="btnCancel">취소</button>
+</div>
+<div id="editPop" class="insert-pop" style="display:none">
+  <span class="range-label" data-i18n="editText">가사</span>
+  <input id="editText" type="text" class="edit-text">
+  <span class="range-label" data-i18n="editStart">시작</span>
+  <input id="editStart" type="number" step="0.01" min="0" class="edit-num">
+  <span class="range-label" data-i18n="editEnd">끝</span>
+  <input id="editEnd" type="number" step="0.01" min="0" class="edit-num">
+  <button class="btn primary" id="editOk" data-i18n="btnSave">저장</button>
+  <button class="btn" id="editCancel" data-i18n="btnCancel">취소</button>
+</div>
+<div id="rangePop" class="insert-pop" style="display:none">
+  <span id="rangeLabel" class="range-label"></span>
+  <input id="rangeSec" type="number" value="10" min="1" max="120" step="1"> <span data-i18n="secUnit">초</span>
+  <button class="btn primary" id="rangeOk" data-i18n="btnRealign">재정렬</button>
+  <button class="btn" id="rangeCancel" data-i18n="btnCancel">취소</button>
+</div>
+<div id="exportModal" class="help-modal" style="display:none">
+  <div class="help-box">
+    <div class="help-head">
+      <h2 data-i18n="exportTitle">내보내기</h2>
+      <div class="export-tools">
+        <select id="exportFmt" class="btn">
+          <option value="txt">TXT</option>
+          <option value="srt">SRT</option>
+          <option value="lrc">LRC</option>
+          <option value="json">JSON</option>
+        </select>
+        <button class="btn" id="exportClose">✕</button>
+      </div>
+    </div>
+    <pre id="exportPreview" class="export-preview"></pre>
+    <div class="export-actions">
+      <button class="btn" id="exportCopy" data-i18n="copyText">복사</button>
+      <button class="btn primary" id="exportSave" data-i18n="saveFile">파일로 저장</button>
+    </div>
+  </div>
+</div>
+<div id="helpModal" class="help-modal" style="display:none">
+  <div class="help-box">
+    <div class="help-head">
+      <h2 id="helpTitle" data-i18n="helpTitle">사용 방법</h2>
+      <button class="btn" id="helpClose">✕</button>
+    </div>
+    <div id="helpBody" class="help-body"></div>
+  </div>
+</div>
+<script src="wavesurfer.min.js"></script>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

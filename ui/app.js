@@ -716,6 +716,7 @@ function renderLyrics() {
     pane.appendChild(h);
     for (const lid of sec.line_ids) {
       const line = linesById[lid];
+      if (!line) continue;   // stale ref after structural undo — skip safely
       const row = document.createElement("div");
       row.className = "line" + (line.adlib ? " adlib" : "");
       const first = unitsById[line.unit_ids[0]];
@@ -1028,6 +1029,7 @@ function snapshot() {
   undoStack.push({
     units_full: structuredClone(project.units),
     lines: structuredClone(project.lines),
+    sections: structuredClone(project.sections),
     anchors: { ...project.anchors },
   });
   if (undoStack.length > 30) undoStack.shift();

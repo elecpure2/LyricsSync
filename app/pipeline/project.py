@@ -738,6 +738,14 @@ def restore_units(pid: str, snapshot: dict) -> dict:
             data["units"] = snapshot["units_full"]
             if snapshot.get("lines"):
                 data["lines"] = snapshot["lines"]
+            if snapshot.get("sections"):
+                data["sections"] = snapshot["sections"]
+            else:
+                # older snapshots: drop line refs that no longer exist
+                # (structural ops like paste also touch section.line_ids)
+                valid = {l["id"] for l in data["lines"]}
+                for s in data["sections"]:
+                    s["line_ids"] = [lid for lid in s["line_ids"] if lid in valid]
             data["anchors"] = snapshot.get("anchors", {})
             save(pid, data)
             return data

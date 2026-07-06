@@ -121,10 +121,24 @@ async function openProject(pid) {
     return;
   }
   showScreen("editor");
+  resetEditorState();   // never carry selection/undo/clipboard across projects
   $("#fpsInput").value = project.fps || 30;
   $("#bpmDisp").textContent = project.beats?.bpm ? `BPM ${project.beats.bpm}` : "BPM ?";
   initWave();
   renderLyrics();
+}
+
+function resetEditorState() {
+  selId = null; rangeId = null;
+  multiSel.clear();
+  region = null; mselRange = null;
+  unitClipboard = null;
+  undoStack = [];
+  unitGhostT = null; unitGhostMap = null;
+  dragMode = null; wasDrag = false;
+  lastPlayingEl = null; lastPlayingLine = null; lastKaraokeT = -1;
+  hideRegionBtn();
+  hidePops();
 }
 
 function showScreen(name) {
@@ -203,20 +217,19 @@ let groupT0 = null;       // drag start time for group move
 let groupDelta = 0;
 const waveWrap = document.getElementById("waveWrap");
 
-/* ripple preview — bead model, mirrors the backend: push on START collisions
-   only, with each chip claiming a capped amount of room */
+/* ripple preview — bead model, mirrors the backend exactly: push on START
+   collisions only, tiny fixed gap (inflated spans must never claim room) */
+const EPS_GAP = 0.03;
 function ripplePreview(startIdx, endIdx, ghost) {
   const units = project.units, anchors = project.anchors;
-  const dur = (u) => Math.max(0.03, (u.end != null && u.start != null) ? u.end - u.start : 0.15);
-  const gap = (u) => Math.max(0.03, Math.min(dur(u), 0.4));
-  let minPos = ghost[units[endIdx].id] + gap(units[endIdx]);
+  let minPos = ghost[units[endIdx].id] + EPS_GAP;
   for (let j = endIdx + 1; j < units.length; j++) {
     const w = units[j];
     if (w.start == null) continue;
     if (anchors[w.id] != null) break;
     if (w.start >= minPos - 1e-6) break;
     ghost[w.id] = minPos;
-    minPos = ghost[w.id] + gap(w);
+    minPos = ghost[w.id] + EPS_GAP;
   }
   let maxPos = ghost[units[startIdx].id];
   for (let j = startIdx - 1; j >= 0; j--) {
@@ -224,7 +237,7 @@ function ripplePreview(startIdx, endIdx, ghost) {
     if (w.start == null) continue;
     if (anchors[w.id] != null) break;
     if (w.start < maxPos - 1e-6) break;
-    ghost[w.id] = Math.max(0, maxPos - gap(w));
+    ghost[w.id] = Math.max(0, maxPos - EPS_GAP);
     maxPos = ghost[w.id];
   }
   return ghost;
@@ -262,28 +275,52 @@ function wrapPos(e) {
   return { x: e.clientX - r.left, y: e.clientY - r.top };
 }
 
+function chipAt(x, y) {
+  // back-to-front so the visually topmost chip wins
+  return [...labelBoxes].reverse().find((b) =>
+    x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) || null;
+}
+
 waveWrap.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 || e.altKey || !ws) return;
   const { x, y } = wrapPos(e);
   wasDrag = false;
   if (multiMode && showWaveLyrics) {
     const t = clickTime(e);
+    const hit = chipAt(x, y);
+    if (hit && multiSel.has(hit.uid)) {
+      // grabbing a selected chip drags the whole group
+      dragMode = "group";
+      groupT0 = t;
+      groupDelta = 0;
+      return;
+    }
+    if (hit) {
+      // unselected chip stays individually grabbable even in multi mode
+      selId = hit.uid;
+      rangeId = null;
+      refreshSelection();
+      dragMode = "unit";
+      return;
+    }
     const gb = multiSel.size ? groupBounds() : null;
     if (gb && t >= gb[0] - 0.1 && t <= gb[1] + 0.1) {
       dragMode = "group";
       groupT0 = t;
       groupDelta = 0;
     } else {
+      // fresh marquee: drop the previous shift-range so highlights don't mix
+      selId = null;
+      rangeId = null;
       dragMode = "mselect";
       mselRange = { t0: t, t1: t };
+      refreshSelection();
     }
     return;
   }
   if (showWaveLyrics) {
     // chips mode: every lyric label is grabbable; region drag is off
-    // (search back-to-front so the visually topmost chip wins)
-    const hit = [...labelBoxes].reverse().find((b) =>
-      x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+    const hit = chipAt(x, y);
     if (hit) {
       selId = hit.uid;
       rangeId = null;
@@ -307,12 +344,14 @@ waveWrap.addEventListener("pointerdown", (e) => {
 waveWrap.addEventListener("pointermove", (e) => {
   if (!ws) return;
   if (dragMode === "mselect") {
+    if (!mselRange) { dragMode = null; return; }   // Esc mid-drag
     wasDrag = true;
     mselRange.t1 = clickTime(e);
     drawOverlay();
     return;
   }
   if (dragMode === "group") {
+    if (!multiSel.size) { dragMode = null; unitGhostMap = null; return; }
     wasDrag = true;
     groupDelta = clickTime(e) - groupT0;
     unitGhostMap = previewGroupMove(groupDelta);
@@ -320,19 +359,22 @@ waveWrap.addEventListener("pointermove", (e) => {
     return;
   }
   if (dragMode === "unit") {
+    if (!selId) { dragMode = null; unitGhostT = null; unitGhostMap = null; return; }
     wasDrag = true;
     unitGhostT = Math.max(0, clickTime(e));
-    unitGhostMap = selId ? previewUnitMove(selId, unitGhostT) : null;
+    unitGhostMap = previewUnitMove(selId, unitGhostT);
     drawOverlay();
     return;
   }
   if (dragMode === "edgeL") {
+    if (!region) { dragMode = null; return; }      // Esc mid-drag
     wasDrag = true;
     region.t0 = Math.max(0, Math.min(clickTime(e), region.t1 - 0.05));
     drawOverlay();
     return;
   }
   if (dragMode === "edgeR") {
+    if (!region) { dragMode = null; return; }
     wasDrag = true;
     region.t1 = Math.max(clickTime(e), region.t0 + 0.05);
     drawOverlay();
@@ -364,13 +406,14 @@ window.addEventListener("pointerup", (e) => {
   dragMode = null;
   dragX0 = null;
   if (mode === "mselect") {
+    if (!mselRange) { setTimeout(() => { wasDrag = false; }, 0); return; }  // Esc mid-drag
     const t0 = Math.min(mselRange.t0, mselRange.t1);
     const t1 = Math.max(mselRange.t0, mselRange.t1);
     mselRange = null;
     multiSel = new Set(project.units
       .filter((u) => u.start != null && u.start >= t0 && u.start <= t1)
       .map((u) => u.id));
-    drawOverlay();
+    refreshSelection();   // pane highlight too, not just the chips
     if (multiSel.size) toast(t("toastMultiSel", { n: multiSel.size }));
     setTimeout(() => { wasDrag = false; }, 0);
     return;
@@ -473,11 +516,7 @@ function unitsInRegion() {
 }
 
 function updateRegionPane() {
-  const inIds = new Set(unitsInRegion().map((u) => u.id));
-  const useShiftRange = selId && rangeId;
-  document.querySelectorAll(".unit").forEach((el) => {
-    el.classList.toggle("inregion", !useShiftRange && inIds.has(el.dataset.uid));
-  });
+  refreshSelection();   // one source of truth for all pane highlights
 }
 
 function showRegionBtn(e) {
@@ -728,12 +767,13 @@ function renderLyrics() {
         const g = document.createElement("span");
         g.className = "gap";
         g.textContent = "+";
-        g.title = "여기에 가사 추가";
+        g.title = t("btnAdd");
         g.onclick = (e) => { e.stopPropagation(); openInsertPop(e, uid, before); };
         row.appendChild(g);
       };
       line.unit_ids.forEach((uid, k) => {
         const u = unitsById[uid];
+        if (!u) return;   // stale ref — skip safely
         if (k === 0) addGap(uid, true);
         const el = document.createElement("span");
         el.className = "unit";
@@ -764,11 +804,15 @@ function rangeSelSet() {
 
 function refreshSelection() {
   const i0 = unitIndex(selId), i1 = unitIndex(rangeId);
+  const regionIds = (region && !(selId && rangeId))
+    ? new Set(unitsInRegion().map((u) => u.id)) : new Set();
   document.querySelectorAll(".unit").forEach((el) => {
-    el.classList.remove("selected", "inrange");
-    const i = unitIndex(el.dataset.uid);
-    if (el.dataset.uid === selId || el.dataset.uid === rangeId) el.classList.add("selected");
+    el.classList.remove("selected", "inrange", "inregion");
+    const uid = el.dataset.uid;
+    const i = unitIndex(uid);
+    if (uid === selId || uid === rangeId) el.classList.add("selected");
     else if (i0 >= 0 && i1 >= 0 && i > Math.min(i0, i1) && i < Math.max(i0, i1)) el.classList.add("inrange");
+    else if (multiSel.has(uid) || regionIds.has(uid)) el.classList.add("inregion");
   });
   drawOverlay();
 }
@@ -834,11 +878,12 @@ let lastKaraokeT = -1;
 function updateKaraoke(t) {
   if (!project || Math.abs(t - lastKaraokeT) < 0.05) return;
   lastKaraokeT = t;
+  // full scan (no early break): manual moves/pastes can leave the array
+  // out of chronological order, which used to freeze the highlight
   let current = null;
   for (const u of project.units) {
-    if (u.start == null) continue;
-    if (u.start <= t) current = u;
-    else break;
+    if (u.start == null || u.start > t) continue;
+    if (current == null || u.start > current.start) current = u;
   }
   const el = current ? document.querySelector(`.unit[data-uid="${current.id}"]`) : null;
   if (el === lastPlayingEl) return;
@@ -1020,6 +1065,9 @@ async function doDeleteUnit(uid) {
   project = await api.post(`/api/projects/${project.id}/delete_unit`, { unit_id: uid });
   busy("");
   if (selId === uid) selId = null;
+  if (rangeId === uid) rangeId = null;
+  multiSel.delete(uid);
+  if (unitClipboard) unitClipboard = unitClipboard.filter((id) => id !== uid);
   renderLyrics();
   toast(t("toastDeleted"));
 }
@@ -1078,7 +1126,9 @@ function selectedRangeUnits() {
 }
 
 $("#btnCopy").onclick = async () => {
-  const units = selectedRangeUnits().filter((u) => u.start != null);
+  // works with either a shift-range or a multi-select marquee
+  const ids = new Set(currentSelectionIds());
+  const units = project.units.filter((u) => ids.has(u.id) && u.start != null);
   if (!units.length) { toast(t("toastSelectFirst")); return; }
   const fps = +$("#fpsInput").value || 30;
   const t0 = units[0].start;
@@ -1221,10 +1271,13 @@ document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   if (e.code === "Space") { e.preventDefault(); ws?.playPause(); }
   else if (e.key === "Escape") {
+    // first Esc closes any open popup, second clears the selection
+    const popOpen = ["#ctxMenu", "#insertPop", "#rangePop", "#editPop"]
+      .some((s) => $(s).style.display !== "none");
     hidePops();
-    clearSelection();
+    if (!popOpen) clearSelection();
   }
-  else if (e.key === "a" || e.key === "A") {
+  else if ((e.key === "a" || e.key === "A") && !e.ctrlKey && !e.altKey && !e.metaKey) {
     if (selId && ws) setAnchor(selId, ws.getCurrentTime());
   }
   else if (e.ctrlKey && (e.key === "z" || e.key === "Z")) { e.preventDefault(); undo(); }
@@ -1277,14 +1330,14 @@ btnWaveLyrics.onclick = () => {
   showWaveLyrics = !showWaveLyrics;
   localStorage.setItem("lyricssync_wavelyrics", showWaveLyrics ? "1" : "0");
   syncWaveLyricsBtn();
-  drawOverlay();
+  if (project) refreshSelection(); else drawOverlay();
 };
 syncWaveLyricsBtn();
 
 $("#multiChk").onchange = () => {
   multiMode = $("#multiChk").checked;
   if (!multiMode) { multiSel.clear(); mselRange = null; }
-  drawOverlay();
+  if (project) refreshSelection(); else drawOverlay();
 };
 
 /* ---------------- custom number spinners ---------------- */

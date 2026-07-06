@@ -1255,7 +1255,15 @@ $("#exportSave").onclick = async () => {
   if (path) toast(t("exported") + path, 3500);
 };
 
-$("#fpsInput").onchange = () => { project.fps = +$("#fpsInput").value || 30; };
+$("#fpsInput").onchange = () => {
+  project.fps = +$("#fpsInput").value || 30;
+  api.post(`/api/projects/${project.id}/fps`, { fps: project.fps }).catch(() => {});
+};
+
+// keep the overlay in sync when the window is resized
+window.addEventListener("resize", () => {
+  if (project && $("#editor").style.display !== "none") drawOverlay();
+});
 
 /* ---------------- keys ---------------- */
 document.addEventListener("keydown", (e) => {

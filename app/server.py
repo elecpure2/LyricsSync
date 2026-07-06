@@ -124,6 +124,14 @@ def api_unit(pid: str, payload: dict = Body(...)):
                              payload.get("end"))
 
 
+@app.post("/api/projects/{pid}/fps")
+def api_fps(pid: str, payload: dict = Body(...)):
+    data = prj.load(pid)
+    data["fps"] = max(1, min(240, int(payload.get("fps", 30))))
+    prj.save(pid, data)
+    return {"ok": True, "fps": data["fps"]}
+
+
 @app.post("/api/projects/{pid}/restore")
 def api_restore(pid: str, payload: dict = Body(...)):
     return prj.restore_units(pid, payload)

@@ -1000,13 +1000,28 @@ function updateBeatPlayhead(tNow) {
     if (cur >= 0) {
       const el = document.querySelector(`.beat[data-group="${g.key}"][data-i="${cur}"]`);
       el?.classList.add("playing");
-      if (g.key === "beats" && ws?.isPlaying()) {
+      if (g.key === "beats" && ws?.isPlaying() && beatsFollow.canFollow()) {
+        beatsFollow.markProgrammatic();
         el?.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     }
     lastBeatHi[g.key] = cur;
   }
 }
+
+/* auto-follow guard: pause playback auto-scroll while the user is scrolling */
+function makeFollowGuard(pane) {
+  const st = { holdUntil: 0, programmaticUntil: 0 };
+  pane.addEventListener("scroll", () => {
+    if (Date.now() > st.programmaticUntil) st.holdUntil = Date.now() + 4000;
+  });
+  return {
+    canFollow: () => Date.now() > st.holdUntil,
+    markProgrammatic: () => { st.programmaticUntil = Date.now() + 1000; },
+  };
+}
+const lyricsFollow = makeFollowGuard($("#lyricsPane"));
+const beatsFollow = makeFollowGuard($("#beatPane"));
 
 /* ---------------- karaoke highlight ---------------- */
 let lastPlayingEl = null;
@@ -1036,7 +1051,10 @@ function updateKaraoke(t) {
     });
     const row = el.closest(".line");
     if (row !== lastPlayingLine && ws?.isPlaying()) {
-      row?.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (lyricsFollow.canFollow()) {
+        lyricsFollow.markProgrammatic();
+        row?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
       lastPlayingLine = row;
     }
   }
@@ -1349,6 +1367,20 @@ function genTXT() {
     L.push("    " + row.units.map((u) =>
       `${u.text} ${fmtTime(u.start)} (f${toFrames(u.start, fps)})`).join("  "));
     L.push("");
+  }
+  // beats appendix — lyrics + drums in one file for AE/LLM workflows
+  const bg = beatGroups().filter((g) => g.items.length);
+  if (bg.length) {
+    L.push(`=== ${t("tabBeats")} ===`);
+    for (const g of bg) {
+      L.push("", `[${g.label}] ${g.items.length}`);
+      let row = [];
+      g.items.forEach((time, i) => {
+        row.push(`#${i + 1} ${fmtTime(time)} (f${toFrames(time, fps)})`);
+        if (row.length === 6) { L.push(row.join("  ")); row = []; }
+      });
+      if (row.length) L.push(row.join("  "));
+    }
   }
   return L.join("\n");
 }

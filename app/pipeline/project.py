@@ -150,7 +150,7 @@ def _analyze(pid: str) -> None:
         _set_stage(pid, "emissions", "정렬 모델 준비 중...")
         aligner = Aligner.get()
         emission, frame_dur = aligner.compute_emissions(stems["vocals"])
-        np.savez_compressed(os.path.join(pdir, "emissions.npz"),
+        np.savez_compressed(os.path.join(pdir, "emissions_star.npz"),
                             emission=emission, frame_dur=frame_dur)
 
         _set_stage(pid, "align", "가사 강제 정렬 중...")
@@ -228,15 +228,25 @@ def _initial_align(data: dict, aligner, emission, frame_dur) -> None:
 # ---------------- anchor re-alignment ----------------
 
 def _emissions(pid: str):
-    z = np.load(os.path.join(_pdir(pid), "emissions.npz"))
-    return z["emission"], float(z["frame_dur"])
+    """Vocal-stem emissions. The star-model cache (29 tokens) supersedes the
+    old 28-token cache; older projects are recomputed transparently."""
+    path = os.path.join(_pdir(pid), "emissions_star.npz")
+    if os.path.exists(path):
+        z = np.load(path)
+        return z["emission"], float(z["frame_dur"])
+    from .align import Aligner
+    data = load(pid)
+    vocals = os.path.join(_pdir(pid), (data.get("stems") or {}).get("vocals", ""))
+    emission, frame_dur = Aligner.get().compute_emissions(vocals)
+    np.savez_compressed(path, emission=emission, frame_dur=frame_dur)
+    return emission, frame_dur
 
 
 def _emissions_mix(pid: str):
     """Emissions computed from the ORIGINAL mix (not the vocal stem).
     Lazily computed and cached — used as a second opinion when the vocal
     stem lost quiet/heavily-processed vocals during separation."""
-    path = os.path.join(_pdir(pid), "emissions_mix.npz")
+    path = os.path.join(_pdir(pid), "emissions_mix_star.npz")
     if os.path.exists(path):
         z = np.load(path)
         return z["emission"], float(z["frame_dur"])

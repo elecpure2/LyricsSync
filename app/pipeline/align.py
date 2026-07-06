@@ -36,8 +36,11 @@ class Aligner:
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         bundle = torchaudio.pipelines.MMS_FA
-        self.model = bundle.get_model(with_star=False).to(self.device).eval()
-        self.dictionary = bundle.get_dict(star=None)
+        # star token absorbs sung-but-unwritten audio (repeated ad-libs,
+        # stretched/glitched vowels) so it can't distort its neighbours
+        self.model = bundle.get_model(with_star=True).to(self.device).eval()
+        self.dictionary = bundle.get_dict()
+        self.star = self.dictionary["*"]
         self.blank = 0
 
     # ---------- emissions ----------
@@ -86,15 +89,28 @@ class Aligner:
             return []
         em = torch.from_numpy(emission[f0:f1])
 
-        words, owners = [], []  # owners[i] -> index into units
+        # build the token sequence; a star between lines (and at the window
+        # edges for long windows) soaks up repeats/ad-libs/glitch runs that
+        # exist in the audio but not in the written lyrics
+        use_stars = (t1 - t0) > 8.0
+        words, owners = [], []          # owners[i] -> unit index, or None for star
+        prev_line = None
         for i, u in enumerate(units):
-            tok = romanize_unit(u["text"])
-            if tok:
-                words.append(self._tokens(tok))
-                owners.append(i)
-        words = [w for w in words if w]
-        if not words:
+            toks = self._tokens(romanize_unit(u["text"]))
+            if not toks:
+                continue
+            line = u.get("line_id")
+            if prev_line is not None and line != prev_line:
+                words.append([self.star])
+                owners.append(None)
+            words.append(toks)
+            owners.append(i)
+            prev_line = line
+        if not any(o is not None for o in owners):
             return []
+        if use_stars:
+            words.insert(0, [self.star]); owners.insert(0, None)
+            words.append([self.star]); owners.append(None)
         flat, word_of_tok = [], []
         for wi, w in enumerate(words):
             flat.extend(w)
@@ -141,6 +157,8 @@ class Aligner:
             agg[2].extend(sp[2])
         for wi, (fs, fe, sc) in wi_seen.items():
             ui = owners[wi]
+            if ui is None:      # star span — absorbed audio, not a lyric
+                continue
             results.append({
                 "id": units[ui]["id"],
                 "start": round(t0 + fs * frame_dur, 4),

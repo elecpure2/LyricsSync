@@ -15,3 +15,6 @@ LyricsSync.lnk
 
 # dev tooling
 .claude/
+
+# personal workflow playbook — local only, never publish
+MY_WORKFLOW.md

@@ -15,6 +15,15 @@ UI_DIR = os.path.join(ROOT, "ui")
 app = FastAPI()
 
 
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    resp = await call_next(request)
+    p = request.url.path
+    if p == "/" or p.endswith((".js", ".css", ".html")):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.get("/api/system")
 def api_system():
     try:

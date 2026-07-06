@@ -87,6 +87,14 @@ every later re-alignment finishes in milliseconds.
 - **Double-click precision edit**: edit a unit's text and exact start/end seconds
 - **Ctrl+Z**: undo everything (anchors, moves, inserts, deletes, re-analyses)
 
+### Beat view (Lyrics/Beats tabs)
+- The editor's lower pane switches between **[Lyrics] / [Beats]** — the Beats tab shows
+  **downbeats (bars), beats and kicks** as chips, just like lyric syllables
+- Click to seek, shift+click for a range, `Copy Range` for absolute start + relative
+  timecodes + frame numbers
+- The current beat highlights live during playback — made for layering **beat-synced
+  flashes/screen effects** on top of your lyric typography
+
 ### Export & integration
 - **Copy Range**: click → shift+click a range → absolute start + **relative timecodes**
   (first char = 0.000) + frame numbers (configurable fps). Built for After Effects precomp workflows

@@ -137,6 +137,9 @@ function resetEditorState() {
   unitGhostT = null; unitGhostMap = null;
   dragMode = null; wasDrag = false;
   lastPlayingEl = null; lastPlayingLine = null; lastKaraokeT = -1;
+  beatSel = null;
+  lastBeatHi = { downbeats: -1, beats: -1, kicks: -1 };
+  setView("lyrics");
   hideRegionBtn();
   hidePops();
 }
@@ -169,6 +172,7 @@ function initWave() {
     $("#timeDisp").textContent = fmtTime(t);
     drawOverlay();
     updateKaraoke(t);
+    updateBeatPlayhead(t);
   });
   ws.on("redrawcomplete", drawOverlay);
   ws.on("scroll", drawOverlay);
@@ -851,8 +855,10 @@ function clearSelection() {
   selId = null; rangeId = null;
   multiSel.clear();
   region = null; mselRange = null;
+  beatSel = null;
   hideRegionBtn();
   refreshSelection();
+  refreshBeatSel();
 }
 
 function onUnitClick(uid, e) {
@@ -868,6 +874,138 @@ function onUnitClick(uid, e) {
     if (u?.start != null && ws) ws.setTime(u.start);
   }
   refreshSelection();
+}
+
+/* ---------------- beat view (lyrics/beats tabs) ---------------- */
+let currentView = "lyrics";           // "lyrics" | "beats"
+let beatSel = null;                   // {group, a, b} contiguous range in one group
+
+function beatGroups() {
+  const b = project?.beats || {};
+  return [
+    { key: "downbeats", label: t("grpDownbeats"), items: b.downbeats || [], cls: "b-down", hcls: "bg-down" },
+    { key: "beats",     label: t("grpBeats"),     items: b.beats || [],     cls: "b-beat", hcls: "bg-beat" },
+    { key: "kicks",     label: t("grpKicks"),     items: b.kicks || [],     cls: "b-kick", hcls: "bg-kick" },
+  ];
+}
+
+function setView(view) {
+  currentView = view;
+  $("#tabLyrics").classList.toggle("toggled", view === "lyrics");
+  $("#tabBeats").classList.toggle("toggled", view === "beats");
+  $("#lyricsPane").style.display = view === "lyrics" ? "block" : "none";
+  $("#beatPane").style.display = view === "beats" ? "block" : "none";
+  if (view === "beats") renderBeats();
+}
+$("#tabLyrics").onclick = () => setView("lyrics");
+$("#tabBeats").onclick = () => setView("beats");
+
+function renderBeats() {
+  const pane = $("#beatPane");
+  pane.innerHTML = "";
+  let any = false;
+  for (const g of beatGroups()) {
+    if (!g.items.length) continue;
+    any = true;
+    const h = document.createElement("div");
+    h.className = `beat-group-header ${g.hcls}`;
+    h.innerHTML = `${g.label} <span class="cnt">${g.items.length}</span>`;
+    pane.appendChild(h);
+    const row = document.createElement("div");
+    row.className = "beat-row";
+    g.items.forEach((time, i) => {
+      const el = document.createElement("span");
+      el.className = `beat ${g.cls}`;
+      el.dataset.group = g.key;
+      el.dataset.i = i;
+      el.innerHTML = `<span class="n">${i + 1}</span><span class="ts">${time.toFixed(2)}</span>`;
+      el.onclick = (e) => onBeatClick(g.key, i, time, e);
+      row.appendChild(el);
+    });
+    pane.appendChild(row);
+  }
+  if (!any) {
+    const d = document.createElement("div");
+    d.className = "beat-empty";
+    d.textContent = t("beatEmpty");
+    pane.appendChild(d);
+  }
+  refreshBeatSel();
+}
+
+function onBeatClick(group, i, time, e) {
+  if (e.shiftKey && beatSel && beatSel.group === group) {
+    beatSel.b = i;
+  } else {
+    beatSel = { group, a: i, b: i };
+    if (ws) ws.setTime(time);
+  }
+  refreshBeatSel();
+}
+
+function refreshBeatSel() {
+  document.querySelectorAll(".beat").forEach((el) => {
+    el.classList.remove("selected", "inrange");
+    if (!beatSel || el.dataset.group !== beatSel.group) return;
+    const i = +el.dataset.i;
+    const [a, b] = [Math.min(beatSel.a, beatSel.b), Math.max(beatSel.a, beatSel.b)];
+    if (i === beatSel.a || i === beatSel.b) el.classList.add("selected");
+    else if (i > a && i < b) el.classList.add("inrange");
+  });
+}
+
+function selectedBeats() {
+  if (!beatSel) return null;
+  const g = beatGroups().find((x) => x.key === beatSel.group);
+  if (!g) return null;
+  const [a, b] = [Math.min(beatSel.a, beatSel.b), Math.max(beatSel.a, beatSel.b)];
+  return { group: g, times: g.items.slice(a, b + 1), from: a };
+}
+
+function copyBeatSelection() {
+  const sel = selectedBeats();
+  if (!sel || !sel.times.length) { toast(t("toastSelectFirst")); return null; }
+  const fps = +$("#fpsInput").value || 30;
+  const t0 = sel.times[0];
+  const L = [
+    `[LyricsSync] ${project.name} — ${sel.group.label}`,
+    `${t("cpAbsStart")}: ${fmtTime(t0)} (${t0.toFixed(3)}s) · fps ${fps} · frame ${toFrames(t0, fps)}` +
+      (project.beats?.bpm ? ` · BPM ${project.beats.bpm}` : ""),
+    "",
+    t("cpRel", { first: `#${sel.from + 1}` }),
+  ];
+  let row = [];
+  sel.times.forEach((time, k) => {
+    const rel = time - t0;
+    row.push(`#${sel.from + k + 1} ${rel.toFixed(3)} (f${toFrames(rel, fps)})`);
+    if (row.length === 6) { L.push(row.join("  ")); row = []; }
+  });
+  if (row.length) L.push(row.join("  "));
+  return L.join("\n");
+}
+
+// playhead highlight in the beat pane (like karaoke for lyrics)
+let lastBeatHi = { downbeats: -1, beats: -1, kicks: -1 };
+function updateBeatPlayhead(tNow) {
+  if (currentView !== "beats" || !project) return;
+  for (const g of beatGroups()) {
+    let cur = -1;
+    for (let i = 0; i < g.items.length; i++) {
+      if (g.items[i] <= tNow) cur = i;
+      else break;
+    }
+    if (cur === lastBeatHi[g.key]) continue;
+    const prev = document.querySelector(`.beat.playing[data-group="${g.key}"]`);
+    prev?.classList.remove("playing");
+    if (cur >= 0) {
+      const el = document.querySelector(`.beat[data-group="${g.key}"][data-i="${cur}"]`);
+      el?.classList.add("playing");
+      if (g.key === "beats" && ws?.isPlaying()) {
+        el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }
+    lastBeatHi[g.key] = cur;
+  }
 }
 
 /* ---------------- karaoke highlight ---------------- */
@@ -1126,6 +1264,14 @@ function selectedRangeUnits() {
 }
 
 $("#btnCopy").onclick = async () => {
+  if (currentView === "beats") {
+    const text = copyBeatSelection();
+    if (text) {
+      await navigator.clipboard.writeText(text);
+      toast(t("toastCopied"));
+    }
+    return;
+  }
   // works with either a shift-range or a multi-select marquee
   const ids = new Set(currentSelectionIds());
   const units = project.units.filter((u) => ids.has(u.id) && u.start != null);

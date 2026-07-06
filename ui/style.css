@@ -191,6 +191,7 @@ textarea#npLyrics { flex: 1; min-height: 120px; resize: none; font-family: Conso
   position: fixed; z-index: 100; background: var(--panel);
   border: 1px solid var(--border); border-radius: 8px; padding: 4px;
   min-width: 230px; box-shadow: 0 8px 28px #0009;
+  display: flex; flex-direction: column;   /* placePop이 flex로 측정해도 세로 높이가 정확하도록 */
 }
 .ctx-item {
   padding: 7px 12px; border-radius: 5px; cursor: pointer; font-size: 12.5px;

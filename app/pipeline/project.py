@@ -382,12 +382,13 @@ def delete_unit(pid: str, unit_id: str) -> dict:
 
 def realign_range(pid: str, unit_id: str, direction: str,
                   seconds: float | None = None) -> dict:
-    """Re-align a stretch of units starting (or ending) at unit_id.
+    """Re-align the units AFTER (or BEFORE) unit_id.
 
-    direction 'after':  audio window [unit.start, unit.start + seconds]
-    direction 'before': audio window [unit.end - seconds, unit.end]
-    seconds=None -> up to the next/previous anchor (or song edge).
-    The clicked unit's boundary time is trusted as the window edge.
+    The clicked unit itself is a hard pin — the user placed/verified it by
+    ear, so it must never move. Only its neighbours are re-aligned, inside a
+    window whose trusted edge is the pinned unit (no edge star tokens, so
+    CTC cannot skip past the pin back to a previous wrong solution). Both
+    the vocal stem and the original mix are tried; best confidence wins.
     """
     from .align import Aligner
     with _lock(pid):
@@ -398,48 +399,79 @@ def realign_range(pid: str, unit_id: str, direction: str,
             return data
         i = idx[unit_id]
         u = units[i]
+        if u.get("start") is None:
+            return data
         duration = data["duration"] or 0.0
         anchor_times = sorted(
             (t, idx[uid]) for uid, t in data["anchors"].items() if uid in idx)
 
         if direction == "after":
-            t0 = u["start"] if u["start"] is not None else 0.0
+            # window starts right after the pinned unit's (capped) length
+            t0 = u["start"] + min(_udur(u), 0.3)
             t1 = t0 + seconds if seconds else duration
             for at, ai in anchor_times:          # don't cross the next anchor
                 if at > t0 + 0.01 and ai > i:
                     t1 = min(t1, at)
                     break
             t1 = min(t1, duration)
+            # membership by lyric order + RELATIVE spacing (current absolute
+            # times are exactly what's wrong here — often shifted as a block)
+            cap = (t1 - t0) * 1.15
             j = i
+            rel_base = None
             while j + 1 < len(units):
-                s = units[j + 1].get("start")
-                if s is not None and s >= t1:
+                w = units[j + 1]
+                if w["id"] in data["anchors"]:
                     break
-                if units[j + 1]["id"] in data["anchors"]:
-                    break
+                s = w.get("start")
+                if s is not None:
+                    if rel_base is None:
+                        rel_base = s
+                    elif s - rel_base > cap:
+                        break
                 j += 1
-            seg = units[i:j + 1]
+            seg = units[i + 1:j + 1]             # pinned unit excluded
         else:
-            t1 = u["end"] if u["end"] is not None else duration
+            # preceding units must finish before the pinned unit starts
+            t1 = u["start"]
             t0 = t1 - seconds if seconds else 0.0
             for at, ai in reversed(anchor_times):  # don't cross prev anchor
                 if at < t1 - 0.01 and ai < i:
                     t0 = max(t0, at)
                     break
             t0 = max(t0, 0.0)
+            cap = (t1 - t0) * 1.15
             j = i
+            rel_base = None
             while j - 1 >= 0:
-                e = units[j - 1].get("end")
-                if e is not None and e <= t0:
+                w = units[j - 1]
+                if w["id"] in data["anchors"]:
                     break
-                if units[j - 1]["id"] in data["anchors"]:
-                    break
+                s = w.get("start")
+                if s is not None:
+                    if rel_base is None:
+                        rel_base = s
+                    elif rel_base - s > cap:
+                        break
                 j -= 1
-            seg = units[j:i + 1]
+            seg = units[j:i]                     # pinned unit excluded
 
         if seg and t1 - t0 >= 0.2:
+            aligner = Aligner.get()
+
+            def mean_conf(rs):
+                return (sum(r["conf"] for r in rs) / len(rs)) if rs else -1.0
+
             emission, frame_dur = _emissions(pid)
-            results = Aligner.get().align_units(emission, frame_dur, seg, t0, t1)
+            candidates = [aligner.align_units(emission, frame_dur, seg,
+                                              t0, t1, edge_stars=False)]
+            try:
+                em_m, fd_m = _emissions_mix(pid)
+                candidates.append(aligner.align_units(em_m, fd_m, seg,
+                                                      t0, t1, edge_stars=False))
+            except Exception:
+                pass
+            results = max(candidates, key=mean_conf)
             by_id = {r["id"]: r for r in results}
             for su in seg:
                 r = by_id.get(su["id"])
@@ -477,13 +509,15 @@ def realign_window(pid: str, t0: float, t1: float,
             # 1st opinion: vocal-stem emissions (same as initial analysis)
             emission, frame_dur = _emissions(pid)
             candidates = [("vocals",
-                           aligner.align_units(emission, frame_dur, seg, t0, t1))]
+                           aligner.align_units(emission, frame_dur, seg,
+                                               t0, t1, edge_stars=False))]
             # 2nd opinion: original mix — separation sometimes destroys
             # quiet/glitched vocals, which is why a part got skipped
             try:
                 em_m, fd_m = _emissions_mix(pid)
                 candidates.append(("mix",
-                                   aligner.align_units(em_m, fd_m, seg, t0, t1)))
+                                   aligner.align_units(em_m, fd_m, seg,
+                                                       t0, t1, edge_stars=False)))
             except Exception:
                 pass
             source, results = max(candidates, key=lambda c: mean_conf(c[1]))

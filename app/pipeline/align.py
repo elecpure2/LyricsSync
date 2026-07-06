@@ -77,11 +77,15 @@ class Aligner:
         return [self.dictionary[c] for c in word if c in self.dictionary]
 
     def align_units(self, emission: np.ndarray, frame_dur: float,
-                    units: list[dict], t0: float, t1: float) -> list[dict]:
+                    units: list[dict], t0: float, t1: float,
+                    edge_stars: bool = True) -> list[dict]:
         """Force-align `units` inside window [t0, t1].
 
         Returns [{id, start, end, conf}] in absolute seconds. Units whose
         romanization is empty get interpolated positions afterwards.
+        edge_stars=False when the window edges are user-trusted boundaries
+        (re-align operations) — an edge star would let CTC skip audio at the
+        pinned edge and drift back to a previous wrong solution.
         """
         f0 = max(0, int(t0 / frame_dur))
         f1 = min(emission.shape[0], int(t1 / frame_dur))
@@ -92,7 +96,7 @@ class Aligner:
         # build the token sequence; a star between lines (and at the window
         # edges for long windows) soaks up repeats/ad-libs/glitch runs that
         # exist in the audio but not in the written lyrics
-        use_stars = (t1 - t0) > 8.0
+        use_stars = edge_stars and (t1 - t0) > 8.0
         words, owners = [], []          # owners[i] -> unit index, or None for star
         prev_line = None
         for i, u in enumerate(units):

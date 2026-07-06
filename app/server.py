@@ -103,6 +103,11 @@ def api_edit_unit(pid: str, payload: dict = Body(...)):
                          payload["start"], payload["end"])
 
 
+@app.post("/api/projects/{pid}/paste_units")
+def api_paste_units(pid: str, payload: dict = Body(...)):
+    return prj.paste_units(pid, payload["unit_ids"], payload["time"])
+
+
 @app.post("/api/projects/{pid}/move_unit")
 def api_move_unit(pid: str, payload: dict = Body(...)):
     return prj.move_unit(pid, payload["unit_id"], payload["start"])

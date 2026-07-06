@@ -168,6 +168,18 @@ function initWave() {
 // duplicate listeners ate the region selection right after each drag)
 $("#waveform").addEventListener("click", (e) => {
   if (wasDrag) { e.stopPropagation(); e.preventDefault(); wasDrag = false; return; }
+  // clicks on a chip / selected-unit block select only — they must NOT move
+  // the playhead (blocking propagation stops wavesurfer's own seek)
+  const p = wrapPos(e);
+  const chipHit = showWaveLyrics && labelBoxes.some((b) =>
+    p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h);
+  const blockHit = !showWaveLyrics && unitBlock &&
+    p.x >= unitBlock.x && p.x <= unitBlock.x + unitBlock.w && p.y <= unitBlock.h;
+  if (chipHit || blockHit) {
+    e.stopPropagation();
+    e.preventDefault();
+    return;
+  }
   if (e.altKey && selId) {
     const t = clickTime(e);
     if (t != null) setAnchor(selId, t);
@@ -382,11 +394,9 @@ window.addEventListener("pointerup", (e) => {
       unitGhostMap = null;
       applyUnitMove(selId, newT);
     } else {
-      // plain click on a chip: select + seek there
+      // plain click on a chip: select only — the playhead stays put
       unitGhostT = null;
       unitGhostMap = null;
-      const u = unitById(selId);
-      if (u && u.start != null && showWaveLyrics) ws.setTime(u.start);
       drawOverlay();
     }
     setTimeout(() => { wasDrag = false; }, 0);
@@ -762,6 +772,36 @@ function refreshSelection() {
   drawOverlay();
 }
 
+/* ---------------- unit clipboard (copy/paste on the waveform) ---------------- */
+let unitClipboard = null;   // array of unit ids (resolved at paste time)
+
+function currentSelectionIds() {
+  if (multiSel.size) {
+    return project.units.filter((u) => multiSel.has(u.id)).map((u) => u.id);
+  }
+  return selectedRangeUnits().map((u) => u.id);
+}
+
+function copySelection() {
+  const ids = currentSelectionIds();
+  if (!ids.length) { toast(t("toastSelectFirst")); return; }
+  unitClipboard = ids;
+  toast(t("toastUnitsCopied", { n: ids.length }));
+}
+
+async function pasteAt(time) {
+  if (!unitClipboard || !unitClipboard.length) return;
+  const ids = unitClipboard.filter((id) => unitById(id));
+  if (!ids.length) { toast(t("toastNoUndo")); return; }
+  snapshot();
+  busy(t("busyAdd"));
+  project = await api.post(`/api/projects/${project.id}/paste_units`,
+    { unit_ids: ids, time: +time.toFixed(4) });
+  busy("");
+  renderLyrics();
+  toast(t("toastPasted", { n: ids.length, time: fmtTime(time) }));
+}
+
 function clearSelection() {
   selId = null; rangeId = null;
   multiSel.clear();
@@ -926,12 +966,21 @@ async function doRealignRange(uid, direction, seconds) {
 
 function openCtxMenu(e, uid) {
   hidePops();
-  selId = uid; rangeId = null;
+  // right-clicking inside an existing multi/range selection keeps it
+  // (so "select 7 units -> right-click -> copy" works)
+  if (!currentSelectionIds().includes(uid)) {
+    selId = uid; rangeId = null;
+  }
   refreshSelection();
   const u = unitById(uid);
   const m = $("#ctxMenu");
+  const nSel = Math.max(1, currentSelectionIds().length);
   const items = [
     { label: "▶ " + t("ctxPlay"), act: () => { if (u.start != null) { ws.setTime(u.start); ws.play(); } } },
+    { label: "📋 " + t("ctxCopy", { n: nSel }), hint: "Ctrl+C", act: () => {
+        if (!currentSelectionIds().length) { selId = uid; rangeId = null; }
+        copySelection();
+      } },
     { sep: true },
     { label: "↻ " + t("ctxAfter"), hint: t("hintAfter"), act: () => doRealignRange(uid, "after", null) },
     { label: "↺ " + t("ctxBefore"), hint: t("hintBefore"), act: () => doRealignRange(uid, "before", null) },
@@ -1177,6 +1226,36 @@ document.addEventListener("keydown", (e) => {
     if (selId && ws) setAnchor(selId, ws.getCurrentTime());
   }
   else if (e.ctrlKey && (e.key === "z" || e.key === "Z")) { e.preventDefault(); undo(); }
+  else if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
+    if (selId || multiSel.size) { e.preventDefault(); copySelection(); }
+  }
+  else if (e.ctrlKey && (e.key === "v" || e.key === "V")) {
+    if (unitClipboard?.length && ws) { e.preventDefault(); pasteAt(ws.getCurrentTime()); }
+  }
+});
+
+// right-click on the waveform: unit menu on a chip, paste menu elsewhere
+waveWrap.addEventListener("contextmenu", (e) => {
+  if (!ws || !project) return;
+  e.preventDefault();
+  const p = wrapPos(e);
+  const hit = showWaveLyrics && [...labelBoxes].reverse().find((b) =>
+    p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h);
+  if (hit) { openCtxMenu(e, hit.uid); return; }
+  if (!unitClipboard || !unitClipboard.length) return;
+  const at = clickTime(e);
+  if (at == null) return;
+  hidePops();
+  const m = $("#ctxMenu");
+  m.innerHTML = "";
+  const d = document.createElement("div");
+  d.className = "ctx-item";
+  d.innerHTML = "📋 " + t("ctxPaste", { n: unitClipboard.length, time: fmtTime(at) }) +
+    '<span class="ctx-hint">Ctrl+V</span>';
+  d.onclick = () => { m.style.display = "none"; pasteAt(at); };
+  m.appendChild(d);
+  placePop(m, e.clientX, e.clientY);
+  m.style.display = "block";
 });
 
 /* ---------------- waveform lyric labels toggle ---------------- */

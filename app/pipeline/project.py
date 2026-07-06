@@ -506,19 +506,16 @@ def _udur(u: dict) -> float:
     return 0.15
 
 
-# Bead model: pushing is based on START times only. Audio spans (ends) can be
-# garbage when alignment stretched a low-confidence unit across a gap, so a
-# chip only claims a capped amount of room when it pushes its neighbours.
-_MAX_GAP = 0.4
-
-
-def _gap(u: dict) -> float:
-    return max(0.03, min(_udur(u), _MAX_GAP))
+# Bead model: pushing is based on START times only, with a tiny fixed gap.
+# Audio spans (ends) are display data — alignment sometimes stretches a
+# low-confidence unit across a long gap, and that must never block placing
+# the next syllable right where the user wants it.
+_EPS_GAP = 0.03
 
 
 def _ripple_forward(units: list, anchors: dict, i: int) -> None:
     """Push following units only when their START would fall behind."""
-    min_pos = units[i]["start"] + _gap(units[i])
+    min_pos = units[i]["start"] + _EPS_GAP
     for j in range(i + 1, len(units)):
         w = units[j]
         if w.get("start") is None:
@@ -530,7 +527,7 @@ def _ripple_forward(units: list, anchors: dict, i: int) -> None:
         wdur = _udur(w)
         w["start"] = round(min_pos, 4)
         w["end"] = round(w["start"] + wdur, 4)
-        min_pos = w["start"] + _gap(w)
+        min_pos = w["start"] + _EPS_GAP
 
 
 def _ripple_backward(units: list, anchors: dict, i: int) -> None:
@@ -545,9 +542,90 @@ def _ripple_backward(units: list, anchors: dict, i: int) -> None:
         if w["start"] < max_pos - 1e-6:
             break
         wdur = _udur(w)
-        w["start"] = round(max(0.0, max_pos - _gap(w)), 4)
+        w["start"] = round(max(0.0, max_pos - _EPS_GAP), 4)
         w["end"] = round(w["start"] + wdur, 4)
         max_pos = w["start"]
+
+
+def _join_units_text(us: list[dict]) -> str:
+    parts = []
+    for w in us:
+        if w["kind"] == "word" and parts:
+            parts.append(" ")
+        parts.append(w["text"])
+        if w["kind"] == "word":
+            parts.append(" ")
+    return "".join(parts).strip()
+
+
+def paste_units(pid: str, unit_ids: list[str], at_time: float) -> dict:
+    """Duplicate the given units at at_time, preserving their internal
+    spacing. The copies become a new lyric line inserted at the matching
+    chronological position (for repeated choruses that appear once in the
+    written lyrics but twice in the song)."""
+    with _lock(pid):
+        data = load(pid)
+        units = data["units"]
+        lines = data["lines"]
+        wanted = set(unit_ids)
+        src = [u for u in units if u["id"] in wanted and u.get("start") is not None]
+        if not src:
+            return data
+        at_time = max(0.0, float(at_time))
+        base = src[0]["start"]
+
+        nid = _new_uid(units)
+        lid_n = max((int(l["id"][1:]) for l in lines if l["id"][1:].isdigit()),
+                    default=-1) + 1
+        lid = f"l{lid_n}"
+        clones = []
+        for u in src:
+            off = u["start"] - base
+            clones.append({
+                "id": f"u{nid}", "text": u["text"], "kind": u["kind"],
+                "line_id": lid,
+                "start": round(at_time + off, 4),
+                "end": round(at_time + off + _udur(u), 4),
+                "conf": u.get("conf"), "anchored": False,
+            })
+            nid += 1
+
+        # find the line after which the new line belongs (by first-unit time)
+        first_start = {}
+        for u in units:
+            if u.get("start") is not None and u["line_id"] not in first_start:
+                first_start[u["line_id"]] = u["start"]
+        after_line = None
+        for l in lines:
+            fs = first_start.get(l["id"])
+            if fs is not None and fs <= at_time:
+                after_line = l
+        new_line = {"id": lid, "section_id": None, "text": _join_units_text(src),
+                    "adlib": False, "unit_ids": [c["id"] for c in clones]}
+
+        if after_line is not None:
+            new_line["section_id"] = after_line["section_id"]
+            last_uid = after_line["unit_ids"][-1]
+            u_idx = {u["id"]: i for i, u in enumerate(units)}
+            insert_at = u_idx[last_uid] + 1
+            lines.insert(lines.index(after_line) + 1, new_line)
+            for s in data["sections"]:
+                if after_line["id"] in s["line_ids"]:
+                    s["line_ids"].insert(
+                        s["line_ids"].index(after_line["id"]) + 1, lid)
+                    break
+        else:
+            first_sec = next((s for s in data["sections"] if s["line_ids"]),
+                             data["sections"][0] if data["sections"] else None)
+            new_line["section_id"] = first_sec["id"] if first_sec else "s0"
+            insert_at = 0
+            lines.insert(0, new_line)
+            if first_sec:
+                first_sec["line_ids"].insert(0, lid)
+
+        units[insert_at:insert_at] = clones
+        save(pid, data)
+        return data
 
 
 def move_unit(pid: str, unit_id: str, new_start: float) -> dict:
